@@ -53,6 +53,11 @@ def process_videos():
             video_path = os.path.join(label_path, video_file)
             cap = cv2.VideoCapture(video_path)
 
+            if not cap.isOpened():
+                print(f'No se pudo abrir el video: {video_path}, se omitirá.')
+                continue
+
+
             frame_count = 0
             while True:
                 ret, frame = cap.read()
