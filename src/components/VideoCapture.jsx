@@ -12,66 +12,77 @@ export default function VideoCapture() {
     useEffect(() => {
         let lastTensor = null;
         const THRESHOLD = 0.02;
-        let isMounted = true;
 
         const startVideo = async () => {
-            await loadModel();
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            videoRef.current.srcObject = stream;
+            try {
+                await loadModel();
 
-            // Create offscreen canvas once
-            const canvas = document.createElement("canvas");
-            canvas.width = 128;
-            canvas.height = 128;
-            canvasRef.current = canvas;
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                const video = videoRef.current;
 
-            async function analyzeFrame() {
-                ctx.drawImage(video, 0, 0, width, height);
+                if (video) {
+                    video.srcObject = stream;
 
-                tf.tidy(() => {
-                    const imgTensor = tf.browser
-                        .fromPixels(canvas)
-                        .resizeNearestNeighbor([224, 224])
-                        .toFloat()
-                        .div(255)
-                        .expandDims();
+                    video.onloadedmetadata = () => {
+                        video.play();
+                    };
 
-                    // calcula diff y decide si predecir
-                    if (lastTensor) {
-                        const diff = tf.metrics.mean(tf.abs(tf.sub(imgTensor, lastTensor))).dataSync()[0];
-                        console.log("Diff:", diff);
-                        if (diff < THRESHOLD) {
-                            // sólo actualiza lastTensor
-                            lastTensor.dispose();
-                            lastTensor = imgTensor.clone();
+                    const canvas = document.createElement("canvas");
+                    canvas.width = 128;
+                    canvas.height = 128;
+                    canvasRef.current = canvas;
+                    const ctx = canvas.getContext("2d");
+
+                    async function analyzeFrame() {
+                        if (!video || video.readyState < 2) {
+                            requestAnimationFrame(analyzeFrame);
                             return;
                         }
+
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                        const imgTensor = tf.browser
+                            .fromPixels(canvas)
+                            .resizeNearestNeighbor([128, 128])
+                            .toFloat()
+                            .div(255.0)
+                            .expandDims();
+
+                        let shouldPredict = true;
+
+                        if (lastTensor) {
+                            const diff = tf.metrics.meanAbsoluteError(lastTensor, imgTensor).dataSync()[0];
+                            if (diff < THRESHOLD) {
+                                shouldPredict = false;
+                            }
+                        }
+
+                        if (shouldPredict) {
+                            const result = await predictGesture(imgTensor);
+                            setGesture(result.gesture);
+                            setConfidence((result.confidence * 100).toFixed(2));
+                        }
+
+                        if (lastTensor) lastTensor.dispose();
+                        lastTensor = imgTensor.clone();
+                        imgTensor.dispose();
+
+                        requestAnimationFrame(analyzeFrame);
                     }
 
-                    // llama a tu modelo
-                    const preds = model.predict(imgTensor);
-                    const data = preds.dataSync();
-                    console.log("Predicción cruda:", data);
-                    // … lógica de elegir y mostrar la clase …
-
-                    // guarda este tensor para el próximo frame
-                    if (lastTensor) lastTensor.dispose();
-                    lastTensor = imgTensor.clone();
-
-                    // limpia el tensor de salida del modelo
-                    preds.dispose();
-                });
+                    analyzeFrame();
+                }
+            } catch (error) {
+                console.error("Error al iniciar video:", error);
             }
-
-            analyzeFrame();
         };
 
         startVideo();
 
         return () => {
-            isMounted = false;
-            if (videoRef.current?.srcObject) {
-                videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+            const video = videoRef.current;
+            if (video?.srcObject) {
+                video.srcObject.getTracks().forEach((t) => t.stop());
             }
             if (canvasRef.current) {
                 canvasRef.current = null;
@@ -80,12 +91,57 @@ export default function VideoCapture() {
     }, []);
 
     return (
-        <div className="p-4">
-            <h2 className="text-xl font-bold mb-2">Inferencia en Tiempo Real (Web)</h2>
-            <video ref={videoRef} autoPlay muted className="w-full max-w-lg rounded-lg shadow mb-4" />
-            <p className="text-lg">
+        <div style={styles.container}>
+            <h2 style={styles.title}>Inferencia en Tiempo Real (Web)</h2>
+            <div style={styles.videoWrapper}>
+                <video ref={videoRef} autoPlay muted playsInline style={styles.video} />
+            </div>
+            <p style={styles.result}>
                 Seña detectada: <strong>{gesture}</strong> ({confidence}%)
             </p>
         </div>
     );
 }
+
+const styles = {
+    container: {
+        padding: "20px",
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+        backgroundColor: "#f3f3f3",
+        borderRadius: "10px",
+        maxWidth: "720px",
+        margin: "0 auto",
+        boxShadow: "0 4px 8px rgba(0,0,0,0.1)",
+    },
+    title: {
+        fontSize: "22px",
+        fontWeight: "bold",
+        marginBottom: "16px",
+        color: "#222",
+        textAlign: "center",
+    },
+    videoWrapper: {
+        position: "relative",
+        width: "100%",
+        maxWidth: "640px",
+        margin: "0 auto 20px auto",
+        backgroundColor: "#000", // fondo por si no carga la cámara
+        borderRadius: "8px",
+        overflow: "hidden",
+    },
+    video: {
+        width: "100%",
+        height: "auto",
+        borderRadius: "8px",
+        display: "block",
+    },
+    result: {
+        fontSize: "18px",
+        color: "#333",
+        textAlign: "center",
+        backgroundColor: "#ffffff",
+        padding: "10px",
+        borderRadius: "6px",
+        boxShadow: "inset 0 0 5px rgba(0,0,0,0.05)",
+    },
+};
