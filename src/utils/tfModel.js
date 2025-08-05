@@ -12,11 +12,16 @@ export const predictGesture = async (frameTensor) => {
 
   const prediction = model.predict(frameTensor);
   const predictionData = await prediction.array();
+
+  // Logs para depurar
+  console.log('Predicción cruda:', predictionData[0]);
+
   const classId = predictionData[0].indexOf(Math.max(...predictionData[0]));
   const confidence = Math.max(...predictionData[0]);
 
-  // Ajusta este mapeo con tus clases reales
   const classLabels = ['letra_A', 'letra_B', 'letra_C'];
+  console.log('→ Clase elegida:', classLabels[classId], '(', confidence, ')');
 
   return { gesture: classLabels[classId], confidence };
 };
+
