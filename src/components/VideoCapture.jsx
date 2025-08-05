@@ -1,101 +1,105 @@
-// src/components/VideoCapture.jsx
 import { useEffect, useRef, useState } from "react";
 import * as tf from "@tensorflow/tfjs";
 import { loadModel, predictGesture } from "../utils/tfModel";
 
 export default function VideoCapture() {
     const videoRef = useRef(null);
-    const canvasRef = useRef(null);
+    const canvasRef = useRef(document.createElement("canvas"));
     const [gesture, setGesture] = useState("");
     const [confidence, setConfidence] = useState("");
+    const [cameraState, setCameraState] = useState("idle");
+    const animationRef = useRef(null); // Usamos RAF en vez de setInterval
 
     useEffect(() => {
-        let lastTensor = null;
-        const THRESHOLD = 0.02;
-
         const startVideo = async () => {
+            setCameraState("loading");
             try {
                 await loadModel();
-
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true });
                 const video = videoRef.current;
+                video.srcObject = stream;
 
-                if (video) {
-                    video.srcObject = stream;
-
-                    video.onloadedmetadata = () => {
-                        video.play();
-                    };
-
-                    const canvas = document.createElement("canvas");
-                    canvas.width = 128;
-                    canvas.height = 128;
-                    canvasRef.current = canvas;
-                    const ctx = canvas.getContext("2d");
-
-                    async function analyzeFrame() {
-                        if (!video || video.readyState < 2) {
-                            requestAnimationFrame(analyzeFrame);
-                            return;
-                        }
-
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                        const imgTensor = tf.browser
-                            .fromPixels(canvas)
-                            .resizeNearestNeighbor([128, 128])
-                            .toFloat()
-                            .div(255.0)
-                            .expandDims();
-
-                        let shouldPredict = true;
-
-                        if (lastTensor) {
-                            const diff = tf.metrics.meanAbsoluteError(lastTensor, imgTensor).dataSync()[0];
-                            if (diff < THRESHOLD) {
-                                shouldPredict = false;
-                            }
-                        }
-
-                        if (shouldPredict) {
-                            const result = await predictGesture(imgTensor);
-                            setGesture(result.gesture);
-                            setConfidence((result.confidence * 100).toFixed(2));
-                        }
-
-                        if (lastTensor) lastTensor.dispose();
-                        lastTensor = imgTensor.clone();
-                        imgTensor.dispose();
-
-                        requestAnimationFrame(analyzeFrame);
-                    }
-
-                    analyzeFrame();
-                }
+                video.onloadedmetadata = async () => {
+                    await video.play();
+                    setCameraState("ready");
+                    analyzeFrame(); // Inicia el ciclo de inferencia
+                };
             } catch (error) {
-                console.error("Error al iniciar video:", error);
+                console.error("Error al acceder a la cámara:", error);
+                setCameraState("error");
+            }
+        };
+
+        const analyzeFrame = async () => {
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+
+            if (!video || !canvas || video.readyState !== 4) {
+                animationRef.current = requestAnimationFrame(analyzeFrame);
+                return;
+            }
+
+            const ctx = canvas.getContext("2d");
+            canvas.width = 128;
+            canvas.height = 128;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            let imgTensor;
+
+            try {
+                imgTensor = tf.browser
+                    .fromPixels(canvas)
+                    .resizeNearestNeighbor([128, 128])
+                    .toFloat()
+                    .div(255.0)
+                    .expandDims();
+
+                const result = await predictGesture(imgTensor);
+                setGesture(result.gesture);
+                setConfidence((result.confidence * 100).toFixed(2));
+            } catch (error) {
+                console.error("Error en la inferencia:", error);
+                setGesture("Error");
+                setConfidence("0");
+            } finally {
+                if (imgTensor) imgTensor.dispose();
+                animationRef.current = requestAnimationFrame(analyzeFrame);
             }
         };
 
         startVideo();
 
         return () => {
+            cancelAnimationFrame(animationRef.current);
             const video = videoRef.current;
             if (video?.srcObject) {
-                video.srcObject.getTracks().forEach((t) => t.stop());
-            }
-            if (canvasRef.current) {
-                canvasRef.current = null;
+                video.srcObject.getTracks().forEach((track) => track.stop());
             }
         };
     }, []);
 
+    const renderMessage = () => {
+        switch (cameraState) {
+            case "loading":
+                return <p style={styles.loading}>Cargando cámara...</p>;
+            case "error":
+                return <p style={{ ...styles.loading, color: "red" }}>Error al acceder a la cámara.</p>;
+            default:
+                return null;
+        }
+    };
+
     return (
         <div style={styles.container}>
             <h2 style={styles.title}>Inferencia en Tiempo Real (Web)</h2>
-            <div style={styles.videoWrapper}>
-                <video ref={videoRef} autoPlay muted playsInline style={styles.video} />
-            </div>
+            {renderMessage()}
+            <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                style={{ ...styles.video, display: cameraState === "ready" ? "block" : "none" }}
+            />
             <p style={styles.result}>
                 Seña detectada: <strong>{gesture}</strong> ({confidence}%)
             </p>
@@ -120,20 +124,12 @@ const styles = {
         color: "#222",
         textAlign: "center",
     },
-    videoWrapper: {
-        position: "relative",
-        width: "100%",
-        maxWidth: "640px",
-        margin: "0 auto 20px auto",
-        backgroundColor: "#000", // fondo por si no carga la cámara
-        borderRadius: "8px",
-        overflow: "hidden",
-    },
     video: {
         width: "100%",
-        height: "auto",
+        maxWidth: "640px",
         borderRadius: "8px",
-        display: "block",
+        boxShadow: "0 0 8px rgba(0,0,0,0.3)",
+        margin: "0 auto 20px auto",
     },
     result: {
         fontSize: "18px",
@@ -143,5 +139,13 @@ const styles = {
         padding: "10px",
         borderRadius: "6px",
         boxShadow: "inset 0 0 5px rgba(0,0,0,0.05)",
+    },
+    loading: {
+        fontSize: "18px",
+        color: "#555",
+        textAlign: "center",
+        padding: "20px",
+        backgroundColor: "#e9e9e9",
+        borderRadius: "8px",
     },
 };

@@ -1,27 +1,34 @@
-import * as tf from '@tensorflow/tfjs';
+import * as tf from "@tensorflow/tfjs";
 
 let model;
 
 export const loadModel = async () => {
-  model = await tf.loadGraphModel('/model_web/model.json');
-  console.log('Modelo cargado correctamente');
+    try {
+        model = await tf.loadGraphModel("/model_web/model.json");
+        console.log("✅ Modelo cargado correctamente");
+    } catch (error) {
+        console.error("❌ Error al cargar el modelo:", error);
+    }
 };
 
 export const predictGesture = async (frameTensor) => {
-  if (!model) return { gesture: 'Modelo no cargado', confidence: 0 };
+    if (!model) {
+        console.error("⚠️ Modelo no cargado.");
+        return { gesture: "Modelo no cargado", confidence: 0 };
+    }
 
-  const prediction = model.predict(frameTensor);
-  const predictionData = await prediction.array();
+    try {
+        const prediction = model.predict(frameTensor);
+        const predictionData = await prediction.data();
+        prediction.dispose();
 
-  // Logs para depurar
-  console.log('Predicción cruda:', predictionData[0]);
+        const classId = predictionData.indexOf(Math.max(...predictionData));
+        const confidence = Math.max(...predictionData);
+        const classLabels = ["letra_A", "letra_B", "letra_C"];
 
-  const classId = predictionData[0].indexOf(Math.max(...predictionData[0]));
-  const confidence = Math.max(...predictionData[0]);
-
-  const classLabels = ['letra_A', 'letra_B', 'letra_C'];
-  console.log('→ Clase elegida:', classLabels[classId], '(', confidence, ')');
-
-  return { gesture: classLabels[classId], confidence };
+        return { gesture: classLabels[classId], confidence };
+    } catch (error) {
+        console.error("❌ Error en predictGesture:", error);
+        return { gesture: "Error", confidence: 0 };
+    }
 };
-
