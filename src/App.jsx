@@ -1,88 +1,60 @@
-import { Link } from 'react-router-dom';
+// src/App.jsx
+import React, { useCallback, useEffect, useState } from "react";
+import { useHands } from "./handlandmarks/useHands";
+import { normalizeLandmarks } from "./handlandmarks/landmarkUtils";
+import { loadWeights, predictProba } from "./handlandmarks/classifier";
+import { smoothProbs, decide } from "./handlandmarks/smoothing";
+import Visualizer from "./handlandmarks/Visualizer";
 
-function App() {
-  return (
-    <>
-      <div className="container">
-        <h1 className="title">Plataforma LSC - Inicio</h1>
-        <nav className="nav-links">
-          <Link to="/capture" className="btn blue">
-            Ir a Captura de Video
-          </Link>
-          <Link to="/image-test" className="btn green">
-            Prueba de Imágenes Estáticas
-          </Link>
-        </nav>
-      </div>
+export default function App() {
+    const [label, setLabel] = useState("-");
+    const [conf, setConf] = useState(0);
+    const [ready, setReady] = useState(false);
+    const [lastLm, setLastLm] = useState(null);
 
-      <style>{`
-        /* Reset básico */
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
+    const onLm = useCallback((lm) => {
+        setLastLm(lm && lm.length === 21 ? lm : null);
+        const feat = normalizeLandmarks(lm);
+        if (!feat) {
+            setLabel("-");
+            setConf(0);
+            return;
         }
-
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          background-color: #f0f2f5;
+        try {
+            const { labels, probs } = predictProba(feat);
+            const pSm = smoothProbs(probs, 0.6);
+            const d = decide(labels, pSm, 0.7);
+            setLabel(d || "-");
+            setConf(Math.max(...pSm));
+        } catch (e) {
+            // Pesos aún no cargados; ignoramos hasta que estén listos
         }
+    }, []);
 
-        .container {
-          max-width: 500px;
-          margin: 80px auto;
-          padding: 40px;
-          background-color: white;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-          border-radius: 12px;
-          text-align: center;
-        }
+    const { videoRef } = useHands(onLm);
 
-        .title {
-          font-size: 28px;
-          font-weight: bold;
-          margin-bottom: 30px;
-          color: #1f2937;
-        }
+    useEffect(() => {
+        loadWeights("/public/weights.json")
+            .then(() => setReady(true))
+            .catch((err) => {
+                console.error("Error cargando weights.json:", err);
+                setReady(false);
+            });
+    }, []);
 
-        .nav-links {
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
+    return (
+        <div style={{ padding: 16, position: "relative", width: 480 }}>
+            <h2>Demo A/B/C con landmarks</h2>
+            <div style={{ position: "relative" }}>
+                <video ref={videoRef} style={{ width: 480, transform: "scaleX(-1)" }} autoPlay muted playsInline />
+                <Visualizer videoRef={videoRef} landmarks={lastLm} />
+            </div>
 
-        .btn {
-          display: inline-block;
-          padding: 12px 24px;
-          border-radius: 8px;
-          text-decoration: none;
-          font-size: 16px;
-          font-weight: 600;
-          transition: background-color 0.3s, transform 0.2s;
-        }
-
-        .btn.blue {
-          background-color: #3b82f6;
-          color: white;
-        }
-
-        .btn.blue:hover {
-          background-color: #2563eb;
-          transform: translateY(-2px);
-        }
-
-        .btn.green {
-          background-color: #10b981;
-          color: white;
-        }
-
-        .btn.green:hover {
-          background-color: #059669;
-          transform: translateY(-2px);
-        }
-      `}</style>
-    </>
-  );
+            <div style={{ marginTop: 8, fontSize: 24 }}>
+                Predicción: <b>{label}</b> &nbsp; Confianza: {conf.toFixed(2)}
+            </div>
+            <p>Umbral: 0.70 · Suavizado EMA: 0.6</p>
+            {!ready && <p style={{ color: "#a00" }}>Cargando pesos… (weights.json)</p>}
+        </div>
+    );
 }
-
-export default App;
